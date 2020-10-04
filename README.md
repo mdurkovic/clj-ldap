@@ -3,7 +3,7 @@
 
 clj-ldap is a thin layer on the [unboundid sdk](http://www.unboundid.com/products/ldap-sdk/) and allows clojure programs to talk to ldap servers. This library is available on [clojars.org](http://clojars.org/search?q=clj-ldap)
 ```clojure
-     :dependencies [[org.clojars.pntblnk/clj-ldap "0.0.16"]]
+     :dependencies [[org.clojars.pntblnk/clj-ldap "0.0.17"]]
 ```
 # Example 
 
@@ -30,7 +30,7 @@ clj-ldap is a thin layer on the [unboundid sdk](http://www.unboundid.com/product
 
 ## connect [options]
 
-Connects to an ldap server and returns a, thread safe, [LDAPConnectionPool](http://www.unboundid.com/products/ldap-sdk/docs/javadoc/com/unboundid/ldap/sdk/LDAPConnectionPool.html).
+Connects to an ldap server and returns a thread safe [LDAPConnectionPool](http://www.unboundid.com/products/ldap-sdk/docs/javadoc/com/unboundid/ldap/sdk/LDAPConnectionPool.html).
 Options is a map with the following entries:
 
     :host                Either a string in the form "address:port"
@@ -83,31 +83,68 @@ a connection is expected. Using a pool in this manner aleviates the caller from 
 release connections. It will still be necessary to get and release a connection if a single
 connection is needed to process a sequence of operations. See the following bind? example.
 
+## bind [connection bind-dn password] [connection-pool bind-dn password]
+
+Usage:
+```clojure
+    ;; Authenticate user with given dn but the pool retains the previous identity on the connection
+    (try
+      (ldap/bind pool "cn=dude,ou=people,dc=example,dc=com" "somepass")
+      (catch LDAPException e
+        (if (= 49 (.intValue (.getResultCode e)))
+          (prn "Password invalid")
+          (throw e))))
+
+    (let [conn (ldap/get-connection pool)
+          user-dn "uid=user.1,ou=people,dc=example,dc=com"
+          user-password "password"]
+      (try
+        ;; Passed a connection, a successful authentication changes the authorization identity of the connection
+        (when (ldap/bind? conn user-dn user-password)
+          (ldap/modify conn user-dn {:replace {:description "On sabatical"}}))
+        (finally (ldap/release-connection pool conn))))
+```
+Performs a bind operation using the provided connection, bindDN and
+password. Returns true if successful and false otherwise.
+
+When an LDAP connection object is used as the connection argument the
+bind? function will attempt to change the identity of that connection
+to that of the provided DN. Subsequent operations on that connection
+will be done using the bound identity.
+
+If an LDAP connection pool object is passed as the connection argument
+the bind attempt will have no side-effects, leaving the state of the
+underlying connections unchanged.
+
+Throws a [LDAPException](http://www.unboundid.com/products/ldap-sdk/docs/javadoc/com/unboundid/ldap/sdk/LDAPException.html) on unsuccessful authentication or other error.
+
 ## bind? [connection bind-dn password] [connection-pool bind-dn password]
 
 Usage:
 ```clojure
+    ;; Authenticate user with given dn but the pool retains the previous identity on the connection
     (ldap/bind? pool "cn=dude,ou=people,dc=example,dc=com" "somepass")
 
     (let [conn (ldap/get-connection pool)
           user-dn "uid=user.1,ou=people,dc=example,dc=com"
           user-password "password"]
       (try
+        ;; Passed a connection, a successful authentication changes the authorization identity of the connection
         (when (ldap/bind? conn user-dn user-password)
           (ldap/modify conn user-dn {:replace {:description "On sabatical"}}))
         (finally (ldap/release-connection pool conn))))
 ```
 Performs a bind operation using the provided connection, bindDN and
-password. Returns true if successful.
-
-If an LDAPConnectionPool object is passed as the connection argument
-the bind attempt will have no side-effects, leaving the state of the
-underlying connections unchanged.
+password. Returns true if successful and false otherwise.
 
 When an LDAP connection object is used as the connection argument the
 bind? function will attempt to change the identity of that connection
 to that of the provided DN. Subsequent operations on that connection
 will be done using the bound identity.
+
+If an LDAP connection pool object is passed as the connection argument
+the bind attempt will have no side-effects, leaving the state of the
+underlying connections unchanged.
 
 ## get [connection dn] [connection dn attributes]
   

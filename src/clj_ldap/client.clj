@@ -28,7 +28,7 @@
             Control
             StartTLSPostConnectProcessor
             CompareRequest
-            CompareResult])
+            CompareResult BindResult])
   (:import [com.unboundid.ldap.sdk.extensions
             PasswordModifyExtendedRequest
             PasswordModifyExtendedResult
@@ -191,6 +191,17 @@
                   (.processExtendedOperation conn (StartTLSExtendedRequest. (create-ssl-context options)))
                   conn)
       :else (LDAPConnection. opt host ldap-port))))
+
+(defn- bind-based-on-connection
+  "Common bind approach for the api:
+     connection represents pool then authenticate and revert bind association on pool connection, or
+     connection is plain then authenticate and remain bound.
+   Note: There is a retainIdentity control (1.3.6.1.4.1.30221.2.5.3) which might also be useful option in the plain
+         connection context but since we make this the default behavior of pool binds it is likely unnecessary."
+  [connection bind-dn password]
+  (if (instance? LDAPConnectionPool connection)
+    (.bindAndRevertAuthentication connection bind-dn password nil)
+    (.bind connection bind-dn password)))
 
 (defn- bind-request
   "Returns a BindRequest object"
@@ -524,23 +535,41 @@
   [pool connection]
   (.releaseAndReAuthenticateConnection pool connection))
 
+(defn bind
+  "Performs a bind operation using the provided connection or pool, bindDN and
+   password. If the bind is unsuccessful LDAPException is thrown. Otherwise, a
+   map is returned with :code, :name, and optional :diagnostic-message keys.
+   The :diagnostic-message might contain password expiration warnings, for instance.
+
+   When an LDAP connection object is used as the connection argument the
+   bind function will attempt to change the identity of that connection
+   to that of the provided DN. Subsequent operations on that connection
+   will be done using the bound identity.
+
+   If an LDAP connection pool object is passed as the connection argument
+   the bind attempt will have no side-effects, leaving the state of the
+   underlying connections unchanged."
+  [connection bind-dn password]
+  (let [^BindResult r (bind-based-on-connection connection bind-dn password)]
+      (merge (ldap-result r)
+             (when-let [diagnostic-message (.getDiagnosticMessage r)]
+               {:diagnostic-message diagnostic-message}))))
+
 (defn bind?
   "Performs a bind operation using the provided connection, bindDN and
-password. Returns true if successful.
+   password. Returns true if successful and false otherwise.
 
-When an LDAP connection object is used as the connection argument the
-bind? function will attempt to change the identity of that connection
-to that of the provided DN. Subsequent operations on that connection
-will be done using the bound identity.
+   When an LDAP connection object is used as the connection argument the
+   bind? function will attempt to change the identity of that connection
+   to that of the provided DN. Subsequent operations on that connection
+   will be done using the bound identity.
 
-If an LDAP connection pool object is passed as the connection argument
-the bind attempt will have no side-effects, leaving the state of the
-underlying connections unchanged."
+   If an LDAP connection pool object is passed as the connection argument
+   the bind attempt will have no side-effects, leaving the state of the
+   underlying connections unchanged."
   [connection bind-dn password]
   (try
-    (let [r (if (instance? LDAPConnectionPool connection)
-              (.bindAndRevertAuthentication connection bind-dn password nil)
-              (.bind connection bind-dn password))]
+    (let [r (bind-based-on-connection connection bind-dn password)]
       (= ResultCode/SUCCESS (.getResultCode r)))
     (catch Exception _ false)))
 
