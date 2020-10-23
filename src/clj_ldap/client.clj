@@ -93,7 +93,7 @@
    adding the DN. We pass along the byte-valued collection to properly
    return binary data."
   ([byte-valued]
-     (entry-as-map byte-valued true))
+   (entry-as-map byte-valued true))
   ([byte-valued dn?]
    (fn [entry]
      (let [attrs (seq (.getAttributes entry))]
@@ -109,10 +109,10 @@
   (condp instance? control
     PreReadResponseControl
     (update-in m [:pre-read] merge ((entry-as-map [] false)
-                                     (.getEntry control)))
+                                    (.getEntry control)))
     PostReadResponseControl
     (update-in m [:post-read] merge ((entry-as-map [] false)
-                                      (.getEntry control)))
+                                     (.getEntry control)))
     m))
 
 (defn- add-response-controls
@@ -473,8 +473,8 @@
                               [(createServerSideSort server-sort)]
                               [])
         proxied-auth-control (if (not-nil? proxied-auth)
-                           [(ProxiedAuthorizationV2RequestControl. proxied-auth)]
-                           [])]
+                               [(ProxiedAuthorizationV2RequestControl. proxied-auth)]
+                               [])]
     (merge original {:base       base
                      :scope      (get-scope scope)
                      :filter     filter
@@ -551,9 +551,9 @@
    underlying connections unchanged."
   [connection bind-dn password]
   (let [^BindResult r (bind-based-on-connection connection bind-dn password)]
-      (merge (ldap-result r)
-             (when-let [diagnostic-message (.getDiagnosticMessage r)]
-               {:diagnostic-message diagnostic-message}))))
+    (merge (ldap-result r)
+           (when-let [diagnostic-message (.getDiagnosticMessage r)]
+             {:diagnostic-message diagnostic-message}))))
 
 (defn bind?
   "Performs a bind operation using the provided connection, bindDN and
@@ -612,7 +612,7 @@
   "Adds an entry to the connected ldap server. The entry is assumed to be
    a map. The options map supports control :proxied-auth."
   ([connection dn entry]
-    (add connection dn entry nil))
+   (add connection dn entry nil))
   ([connection dn entry options]
    (let [entry-obj (Entry. dn)]
      (set-entry-map! entry-obj entry)
@@ -658,7 +658,7 @@ Where :add adds an attribute value, :delete deletes an attribute value and
 The entries :pre-read and :post-read specify attributes that have be read and
 returned either before or after the modifications have taken place."
   ([connection dn modifications]
-    (modify connection dn modifications nil))
+   (modify connection dn modifications nil))
   ([connection dn modifications options]
    (let [modify-obj (get-modify-request dn modifications)]
      (when options
@@ -691,7 +691,7 @@ returned either before or after the modifications have taken place."
   RDN value from the target entry. The options map supports pre/post-read
   and proxied-auth controls."
   ([connection dn new-rdn delete-old-rdn]
-    (modify-rdn connection dn new-rdn delete-old-rdn nil))
+   (modify-rdn connection dn new-rdn delete-old-rdn nil))
   ([connection dn new-rdn delete-old-rdn options]
    (let [request (ModifyDNRequest. dn new-rdn delete-old-rdn)]
      (when options
