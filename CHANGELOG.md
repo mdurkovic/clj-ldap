@@ -2,6 +2,11 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.0.17]
+This release adds the following:
+- A `bind` function which behaves similarly to `bind?` except that it throws `LDAPException` on failure. Thanks to @yogthos and @sumbach.
+- A bump of the ldap-sdk to 5.1.1. 
+
 ## [0.0.16]
 This release adds the following:
 - A lazy-seq returned by `search-all-results` using SimplePagedResults control. Thanks to @jindrichmynarz.

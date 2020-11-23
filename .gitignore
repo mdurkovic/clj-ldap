@@ -13,4 +13,4 @@ pom.xml.asc
 .idea
 clj-ldap.iml
 test-resources/access
-test-resources/access.lck
+test-resources/access.*

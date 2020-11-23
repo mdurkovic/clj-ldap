@@ -27,6 +27,9 @@
     (.setFormatter fileHandler (MinimalLogFormatter. nil false false true))
     fileHandler))
 
+;; Server's certificate, with alias "server-cert" generated using keytool like so:
+;; keytool -genkey -keyalg RSA -alias server-cert -keystore selfsigned.jks -validity 3650 -keysize 2048
+
 (defn- start-ldap-server
   "Setup a server listening on available LDAP and LDAPS ports chosen at random"
   []

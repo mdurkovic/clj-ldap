@@ -28,7 +28,7 @@
             Control
             StartTLSPostConnectProcessor
             CompareRequest
-            CompareResult])
+            CompareResult BindResult])
   (:import [com.unboundid.ldap.sdk.extensions
             PasswordModifyExtendedRequest
             PasswordModifyExtendedResult
@@ -93,7 +93,7 @@
    adding the DN. We pass along the byte-valued collection to properly
    return binary data."
   ([byte-valued]
-     (entry-as-map byte-valued true))
+   (entry-as-map byte-valued true))
   ([byte-valued dn?]
    (fn [entry]
      (let [attrs (seq (.getAttributes entry))]
@@ -109,10 +109,10 @@
   (condp instance? control
     PreReadResponseControl
     (update-in m [:pre-read] merge ((entry-as-map [] false)
-                                     (.getEntry control)))
+                                    (.getEntry control)))
     PostReadResponseControl
     (update-in m [:post-read] merge ((entry-as-map [] false)
-                                      (.getEntry control)))
+                                     (.getEntry control)))
     m))
 
 (defn- add-response-controls
@@ -191,6 +191,17 @@
                   (.processExtendedOperation conn (StartTLSExtendedRequest. (create-ssl-context options)))
                   conn)
       :else (LDAPConnection. opt host ldap-port))))
+
+(defn- bind-based-on-connection
+  "Common bind approach for the api:
+     connection represents pool then authenticate and revert bind association on pool connection, or
+     connection is plain then authenticate and remain bound.
+   Note: There is a retainIdentity control (1.3.6.1.4.1.30221.2.5.3) which might also be useful option in the plain
+         connection context but since we make this the default behavior of pool binds it is likely unnecessary."
+  [connection bind-dn password]
+  (if (instance? LDAPConnectionPool connection)
+    (.bindAndRevertAuthentication connection bind-dn password nil)
+    (.bind connection bind-dn password)))
 
 (defn- bind-request
   "Returns a BindRequest object"
@@ -462,8 +473,8 @@
                               [(createServerSideSort server-sort)]
                               [])
         proxied-auth-control (if (not-nil? proxied-auth)
-                           [(ProxiedAuthorizationV2RequestControl. proxied-auth)]
-                           [])]
+                               [(ProxiedAuthorizationV2RequestControl. proxied-auth)]
+                               [])]
     (merge original {:base       base
                      :scope      (get-scope scope)
                      :filter     filter
@@ -524,23 +535,41 @@
   [pool connection]
   (.releaseAndReAuthenticateConnection pool connection))
 
+(defn bind
+  "Performs a bind operation using the provided connection or pool, bindDN and
+   password. If the bind is unsuccessful LDAPException is thrown. Otherwise, a
+   map is returned with :code, :name, and optional :diagnostic-message keys.
+   The :diagnostic-message might contain password expiration warnings, for instance.
+
+   When an LDAP connection object is used as the connection argument the
+   bind function will attempt to change the identity of that connection
+   to that of the provided DN. Subsequent operations on that connection
+   will be done using the bound identity.
+
+   If an LDAP connection pool object is passed as the connection argument
+   the bind attempt will have no side-effects, leaving the state of the
+   underlying connections unchanged."
+  [connection bind-dn password]
+  (let [^BindResult r (bind-based-on-connection connection bind-dn password)]
+    (merge (ldap-result r)
+           (when-let [diagnostic-message (.getDiagnosticMessage r)]
+             {:diagnostic-message diagnostic-message}))))
+
 (defn bind?
   "Performs a bind operation using the provided connection, bindDN and
-password. Returns true if successful.
+   password. Returns true if successful and false otherwise.
 
-When an LDAP connection object is used as the connection argument the
-bind? function will attempt to change the identity of that connection
-to that of the provided DN. Subsequent operations on that connection
-will be done using the bound identity.
+   When an LDAP connection object is used as the connection argument the
+   bind? function will attempt to change the identity of that connection
+   to that of the provided DN. Subsequent operations on that connection
+   will be done using the bound identity.
 
-If an LDAP connection pool object is passed as the connection argument
-the bind attempt will have no side-effects, leaving the state of the
-underlying connections unchanged."
+   If an LDAP connection pool object is passed as the connection argument
+   the bind attempt will have no side-effects, leaving the state of the
+   underlying connections unchanged."
   [connection bind-dn password]
   (try
-    (let [r (if (instance? LDAPConnectionPool connection)
-              (.bindAndRevertAuthentication connection bind-dn password nil)
-              (.bind connection bind-dn password))]
+    (let [r (bind-based-on-connection connection bind-dn password)]
       (= ResultCode/SUCCESS (.getResultCode r)))
     (catch Exception _ false)))
 
@@ -583,7 +612,7 @@ underlying connections unchanged."
   "Adds an entry to the connected ldap server. The entry is assumed to be
    a map. The options map supports control :proxied-auth."
   ([connection dn entry]
-    (add connection dn entry nil))
+   (add connection dn entry nil))
   ([connection dn entry options]
    (let [entry-obj (Entry. dn)]
      (set-entry-map! entry-obj entry)
@@ -629,7 +658,7 @@ Where :add adds an attribute value, :delete deletes an attribute value and
 The entries :pre-read and :post-read specify attributes that have be read and
 returned either before or after the modifications have taken place."
   ([connection dn modifications]
-    (modify connection dn modifications nil))
+   (modify connection dn modifications nil))
   ([connection dn modifications options]
    (let [modify-obj (get-modify-request dn modifications)]
      (when options
@@ -662,7 +691,7 @@ returned either before or after the modifications have taken place."
   RDN value from the target entry. The options map supports pre/post-read
   and proxied-auth controls."
   ([connection dn new-rdn delete-old-rdn]
-    (modify-rdn connection dn new-rdn delete-old-rdn nil))
+   (modify-rdn connection dn new-rdn delete-old-rdn nil))
   ([connection dn new-rdn delete-old-rdn options]
    (let [request (ModifyDNRequest. dn new-rdn delete-old-rdn)]
      (when options

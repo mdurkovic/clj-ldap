@@ -2,7 +2,8 @@
   "Automated tests for clj-ldap"
   (:require [clj-ldap.client :as ldap]
             [clj-ldap.test.server :as server])
-  (:use clojure.test))
+  (:use clojure.test)
+  (:import (com.unboundid.ldap.sdk LDAPException)))
 
 
 ;; Tests are run over a variety of connection types (LDAP and LDAPS for now)
@@ -130,14 +131,24 @@
 (use-fixtures :once test-server)
 
 (deftest test-get
-  (is (= (ldap/get *conn* (:dn person-a*))
-         (assoc (:object person-a*) :dn (:dn person-a*))))
-  (is (= (ldap/get *conn* (:dn person-b*))
-         (assoc (:object person-b*) :dn (:dn person-b*))))
-  (is (= (ldap/get *conn* (:dn person-a*) [:cn :sn])
-         {:dn (:dn person-a*)
+  (is (= (assoc (:object person-a*) :dn (:dn person-a*))
+         (ldap/get *conn* (:dn person-a*))))
+  (is (= (assoc (:object person-b*) :dn (:dn person-b*))
+         (ldap/get *conn* (:dn person-b*))))
+  (is (= {:dn (:dn person-a*)
           :cn (-> person-a* :object :cn)
-          :sn (-> person-a* :object :sn)})))
+          :sn (-> person-a* :object :sn)}
+         (ldap/get *conn* (:dn person-a*) [:cn :sn]))))
+
+(deftest some-bind
+  (is (= {:code 0, :name "success"}
+         (ldap/bind *conn* (:dn person-a*) "passa")))
+  (is (thrown? LDAPException (ldap/bind *conn* (:dn person-a*) "notthepass")))
+  (is (thrown? LDAPException (ldap/bind *conn* "cn=does,ou=not,cn=exist" "password"))))
+
+(deftest bad-bind?
+  (is (= false (ldap/bind? *conn* (:dn person-a*) "not-the-password")))
+  (is (= false (ldap/bind? *conn* "cn=does,ou=not,cn=exist" "password"))))
 
 (deftest test-bind
   (if (> (-> *conn*
@@ -148,164 +159,158 @@
             _ (ldap/bind? *c* (:dn person-a*) "passa")
             a (ldap/who-am-i *c*)
             _ (ldap/release-connection *conn* *c*)]
-        (is (= [before a]
-               ["" (:dn person-a*)]))))))
+        (is (= ["" (:dn person-a*)] [before a]))))))
 
 (deftest test-add-delete
-  (is (= (ldap/add *conn* (:dn person-c*) (:object person-c*))
-         success*))
-  (is (= (ldap/get *conn* (:dn person-c*))
-         (assoc (:object person-c*) :dn (:dn person-c*))))
-  (is (= (ldap/delete *conn* (:dn person-c*))
-         success*))
+  (is (= success* (ldap/add *conn* (:dn person-c*) (:object person-c*))))
+  (is (= (assoc (:object person-c*) :dn (:dn person-c*))
+         (ldap/get *conn* (:dn person-c*))))
+  (is (= success* (ldap/delete *conn* (:dn person-c*))))
   (is (nil? (ldap/get *conn* (:dn person-c*))))
-  (is (= (ldap/add *conn* (str "changeNumber=1234," base*)
+  (is (= success*
+         (ldap/add *conn* (str "changeNumber=1234," base*)
                    {:objectClass ["changeLogEntry"]
                     :changeNumber 1234
                     :targetDN base*
-                    :changeType "modify"})
-         success*))
-  (is (= (:changeNumber (ldap/get *conn* (str "changeNumber=1234," base*)))
-         "1234"))
-  (is (= (ldap/delete *conn* (str "changeNumber=1234," base*)
-                      {:pre-read [:objectClass]})
-         {:code 0, :name "success",
-          :pre-read {:objectClass #{"top" "changeLogEntry"}}})))
+                    :changeType "modify"})))
+  (is (= "1234" (:changeNumber (ldap/get *conn* (str "changeNumber=1234," base*)))))
+  (is (= {:code 0, :name "success",
+          :pre-read {:objectClass #{"top" "changeLogEntry"}}}
+         (ldap/delete *conn* (str "changeNumber=1234," base*)
+                      {:pre-read [:objectClass]}))))
 
 (deftest test-delete-subtree
-  (is (= (ldap/add *conn* (:dn person-c*) (:object person-c*))
-         success*))
-  (is (= (ldap/delete *conn* base* {:delete-subtree true})
-         success*))
+  (is (= success* (ldap/add *conn* (:dn person-c*) (:object person-c*))))
+  (is (= success* (ldap/delete *conn* base* {:delete-subtree true})))
   (is (nil? (ldap/get *conn* base*))))
 
 (deftest test-modify-add
-  (is (= (ldap/modify *conn* (:dn person-a*)
+  (is (= {:code 0, :name "success",
+          :pre-read {:objectClass #{"top" "person"}, :cn "testa"},
+          :post-read {:l "Hollywood", :cn "testa"}}
+         (ldap/modify *conn* (:dn person-a*)
                       {:add {:objectClass "organizationalPerson"
                              :l "Hollywood"}
                        :pre-read #{:objectClass :l :cn}
-                       :post-read #{:l :cn}})
-         {:code 0, :name "success",
-          :pre-read {:objectClass #{"top" "person"}, :cn "testa"},
-          :post-read {:l "Hollywood", :cn "testa"}}))
-  (is (= (ldap/modify
-          *conn* (:dn person-b*)
-          {:add {:telephoneNumber ["0000000005" "0000000006"]}})
-         success*))
+                       :post-read #{:l :cn}})))
+  (is (= success*
+         (ldap/modify *conn* (:dn person-b*)
+           {:add {:telephoneNumber ["0000000005" "0000000006"]}})))
   (let [new-a (ldap/get *conn* (:dn person-a*))
         new-b (ldap/get *conn* (:dn person-b*))
         obj-a (:object person-a*)
         obj-b (:object person-b*)]
-    (is  (= (:objectClass new-a)
-            (conj (:objectClass obj-a) "organizationalPerson")))
-    (is (= (:l new-a) "Hollywood"))
-    (is (= (set (:telephoneNumber new-b))
-           (set (concat (:telephoneNumber obj-b)
-                        ["0000000005" "0000000006"]))))))
+    (is  (= (conj (:objectClass obj-a) "organizationalPerson")
+            (:objectClass new-a)))
+    (is (= "Hollywood" (:l new-a)))
+    (is (= (set (concat (:telephoneNumber obj-b)
+                        ["0000000005" "0000000006"]))
+           (set (:telephoneNumber new-b))))))
 
 (deftest test-modify-delete
   (let [b-phonenums (-> person-b* :object :telephoneNumber)]
-    (is (= (ldap/modify *conn* (:dn person-a*)
-                        {:delete {:description :all}})
-           success*))
-    (is (= (ldap/modify *conn* (:dn person-b*)
-                        {:delete {:telephoneNumber (first b-phonenums)}})
-           success*))
-    (is (= (ldap/get *conn* (:dn person-a*))
-           (-> (:object person-a*)
+    (is (= success*
+           (ldap/modify *conn* (:dn person-a*)
+                        {:delete {:description :all}})))
+    (is (= success*
+           (ldap/modify *conn* (:dn person-b*)
+                        {:delete {:telephoneNumber (first b-phonenums)}})))
+    (is (= (-> (:object person-a*)
                (dissoc :description)
-               (assoc :dn (:dn person-a*)))))
-    (is (= (ldap/get *conn* (:dn person-b*))
-           (-> (:object person-b*)
+               (assoc :dn (:dn person-a*)))
+           (ldap/get *conn* (:dn person-a*))))
+    (is (= (-> (:object person-b*)
                (assoc :telephoneNumber (second b-phonenums))
-               (assoc :dn (:dn person-b*)))))))
+               (assoc :dn (:dn person-b*)))
+           (ldap/get *conn* (:dn person-b*))))))
 
 (deftest test-modify-replace
   (let [new-phonenums (-> person-b* :object :telephoneNumber)
         certificate-data (read-bytes-from-file
                            "test-resources/cert.binary")]
-    (is (= (ldap/modify *conn* (:dn person-a*)
-                        {:replace {:telephoneNumber new-phonenums}})
-           success*))
-    (is (= (ldap/get *conn* (:dn person-a*))
-           (-> (:object person-a*)
+    (is (= success*
+           (ldap/modify *conn* (:dn person-a*)
+                        {:replace {:telephoneNumber new-phonenums}})))
+    (is (= (-> (:object person-a*)
                (assoc :telephoneNumber new-phonenums)
-               (assoc :dn (:dn person-a*)))))
-    (is (= (ldap/modify *conn* (:dn person-a*)
+               (assoc :dn (:dn person-a*)))
+           (ldap/get *conn* (:dn person-a*))))
+
+    (is (= success*
+           (ldap/modify *conn* (:dn person-a*)
                         {:add {:objectclass ["inetOrgPerson"
                                              "organizationalPerson"]
                                :userCertificate certificate-data}}
-                        {:proxied-auth (str "dn:" (:dn person-a*))})
-           success*))
-    (is (= (seq (:userCertificate
+                        {:proxied-auth (str "dn:" (:dn person-a*))})))
+    (is (= (seq certificate-data)
+           (seq (:userCertificate
                   (first (ldap/search *conn* (:dn person-a*)
                                       {:scope :base
                                        :filter "(objectclass=inetorgperson)"
                                        :attributes [:userCertificate]
-                                       :byte-valued [:userCertificate]}))))
-           (seq certificate-data)))
-    (is (= (seq (:userCertificate
+                                       :byte-valued [:userCertificate]}))))))
+    (is (= (seq certificate-data)
+           (seq (:userCertificate
                   (first (ldap/search *conn* (:dn person-a*)
                                       {:scope :base
-                                       :byte-valued [:userCertificate]}))))
-           (seq certificate-data)))
-    (is (= (seq (:userCertificate (ldap/get *conn* (:dn person-a*)
+                                       :byte-valued [:userCertificate]}))))))
+    (is (= (seq certificate-data)
+           (seq (:userCertificate (ldap/get *conn* (:dn person-a*)
                                             [:userCertificate]
-                                            [:userCertificate])))
-           (seq certificate-data)))))
+                                            [:userCertificate])))))))
 
 (deftest test-modify-all
   (let [b (:object person-b*)
         b-phonenums (:telephoneNumber b)]
-    (is (= (ldap/modify *conn* (:dn person-b*)
+    (is (= success*
+           (ldap/modify *conn* (:dn person-b*)
                         {:add {:telephoneNumber "0000000005"}
                          :delete {:telephoneNumber (second b-phonenums)}
-                         :replace {:description "desc x"}})
-           success*))
+                         :replace {:description "desc x"}})))
     (let [new-b (ldap/get *conn* (:dn person-b*))]
-      (is (= (set (:telephoneNumber new-b))
-             (set [(first b-phonenums) "0000000005"])))
-      (is (= (:description new-b) "desc x")))))
+      (is (= (set [(first b-phonenums) "0000000005"])
+             (set (:telephoneNumber new-b))))
+      (is (= "desc x" (:description new-b))))))
 
 (deftest test-search
-  (is (= (set (map :cn
-                   (ldap/search *conn* base* {:attributes [:cn]})))
-         (set [nil "testa" "testb" "Saul Hazledine"])))
-  (is (= (set (map :cn
+  (is (= (set [nil "testa" "testb" "Saul Hazledine"])
+         (set (map :cn
+                   (ldap/search *conn* base* {:attributes [:cn]})))))
+  (is (= (set ["testa" "testb"])
+         (set (map :cn
                    (ldap/search *conn* base*
                                 {:attributes [:cn]
                                  :filter     "cn=test*"
-                                 :proxied-auth  (str "dn:" (:dn person-a*))})))
-         (set ["testa" "testb"])))
-  (is (= (map :cn
+                                 :proxied-auth  (str "dn:" (:dn person-a*))})))))
+  (is (= '("Saul Hazledine" "testa" "testb")
+         (map :cn
               (ldap/search *conn* base*
                            {:filter "cn=*"
                             :server-sort {:is-critical true
-                                          :sort-keys [:cn :ascending]}}))
-         '("Saul Hazledine" "testa" "testb")))
-  (is (= (count (map :cn
-                     (ldap/search *conn* base*
-                                  {:attributes [:cn] :filter "cn=*"
-                                   :size-limit 2})))
-         2))
-  (is (= (:description (map :cn
-                            (ldap/search *conn* base*
-                                        {:attributes [:cn]
-                                         :filter "cn=István Orosz"
-                                         :types-only true})))
-         nil))
-  (is (= (set (map :description
+                                          :sort-keys [:cn :ascending]}}))))
+
+  (is (= 2 (count (map :cn
+                       (ldap/search *conn* base*
+                                    {:attributes [:cn] :filter "cn=*"
+                                     :size-limit 2})))))
+  (is (= nil (:description (map :cn
+                                (ldap/search *conn* base*
+                                            {:attributes [:cn]
+                                             :filter "cn=István Orosz"
+                                             :types-only true})))))
+  (is (= (set ["István Orosz"])
+         (set (map :description
                    (ldap/search *conn* base*
-                                {:filter "cn=testb" :types-only false})))
-         (set ["István Orosz"])))
+                                {:filter "cn=testb" :types-only false})))))
   (binding [*side-effects* #{}]
     (ldap/search! *conn* base* {:attributes [:cn :sn] :filter "cn=test*"}
                   (fn [x]
                     (set! *side-effects*
                           (conj *side-effects* (dissoc x :dn)))))
-    (is (= *side-effects*
-           (set [{:cn "testa" :sn "a"}
-                 {:cn "testb" :sn "b"}])))))
+    (is (= (set [{:cn "testa" :sn "a"}
+                 {:cn "testb" :sn "b"}])
+           *side-effects*))))
+
 
 (deftest test-search-all
   (let [options {:attributes [:cn] :page-size 2}
@@ -319,10 +324,8 @@
           (->cn-set eager-results)))))
 
 (deftest test-compare?
-  (is (= (ldap/compare? *conn* (:dn person-b*)
-                        :description "István Orosz")
-         true))
-  (is (= (ldap/compare? *conn* (:dn person-a*)
-                        :description "István Orosz"
-                        {:proxied-auth (str "dn:" (:dn person-b*))})
-         false)))
+  (is (= true (ldap/compare? *conn* (:dn person-b*)
+                             :description "István Orosz")))
+  (is (= false (ldap/compare? *conn* (:dn person-a*)
+                              :description "István Orosz"
+                              {:proxied-auth (str "dn:" (:dn person-b*))}))))
