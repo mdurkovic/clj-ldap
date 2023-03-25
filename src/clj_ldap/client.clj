@@ -3,6 +3,7 @@
   (:refer-clojure :exclude [get])
   (:require [clojure.string :as string]
             [clojure.pprint :refer (pprint)])
+  (:import [clojure.lang IFn IDeref])
   (:import [com.unboundid.ldap.sdk
             LDAPResult
             LDAPConnectionOptions
@@ -28,7 +29,13 @@
             Control
             StartTLSPostConnectProcessor
             CompareRequest
-            CompareResult BindResult])
+            CompareResult BindResult
+            SearchResultListener  
+            AsyncSearchResultListener
+            AsyncRequestID
+            SearchResult
+            SearchResultEntry
+            SearchResultReference])
   (:import [com.unboundid.ldap.sdk.extensions
             PasswordModifyExtendedRequest
             PasswordModifyExtendedResult
@@ -396,6 +403,53 @@
         (map (entry-as-map byte-valued) (.getSearchEntries e))
         (throw e)))))
 
+(defn- search-results-flow
+  "Returns a sequence of search results for the given search criteria.
+   Ignore a size limit exceeded exception if one occurs. If the caller
+   provided a respf then apply the function to any response controls."
+  [conn {:keys [base scope filter attributes size-limit time-limit types-only
+                controls respf byte-valued]}]
+  (fn [notify terminate]
+    (let [*state (atom {})
+          req (SearchRequest.
+               (reify
+                 SearchResultListener
+                 (^void searchEntryReturned [_ ^SearchResultEntry entry]
+                   (println "+++ searchEntryReturned: " (print-str (bean entry)))
+                   (swap! *state assoc :next-entry ((entry-as-map byte-valued) entry))
+                   (notify)
+                   nil)
+                 (^void  searchReferenceReturned [_ ^SearchResultReference entry]
+                   (println "+++ searchReferenceReturned: " (print-str (bean entry)))
+                  ;;  TODO
+                   nil)
+                 AsyncSearchResultListener
+                 (^void searchResultReceived
+                   [_ ^AsyncRequestID requestID ^SearchResult searchResult]
+                   (println "+++ searchResultReceived: " (print-str (bean searchResult)))
+                   (if (= ResultCode/SUCCESS (.getResult searchResult))
+                     (terminate)
+                     (do (swap! *state assoc :fail-with searchResult)
+                         (notify)))
+                   nil))
+               base scope DereferencePolicy/NEVER size-limit
+               time-limit types-only filter attributes)
+          _ (and (seq? controls)
+                 (.addControls req (into-array Control controls)))
+          arid (.asyncSearch conn req)]
+      (reify
+        IDeref (deref [_]
+                 (let [{:keys [fail-with next-entry]} @*state]
+                   (println "+++ deref: " @*state)
+                   (if fail-with
+                     (do (terminate) fail-with)
+                     next-entry)))
+        IFn    (invoke [_]
+                 (println "+++ invoke: " @*state)
+                 (try (.abandon conn arid)
+                      (catch Exception e
+                        (println "+++ invoke: exception: " e))))))))
+
 (defn- search-results!
   "Call the given function with the results of the search using
    the given search criteria"
@@ -757,6 +811,14 @@ returned either before or after the modifications have taken place."
    (search connection base nil))
   ([connection base options]
    (search-results connection (search-criteria base options))))
+
+(defn search-flow
+  "Runs an async search on the connected ldap server, reads all the results into
+   memory and returns the results as a sequence of maps."
+  ([connection base]
+   (search-flow connection base nil))
+  ([connection base options]
+   (search-results-flow connection (search-criteria base options))))
 
 (defn search!
   "Runs a search on the connected ldap server and executes the given
